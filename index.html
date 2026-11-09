@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Ping-Pong Loop</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; height: 100%; background: #000; color: #eee; font: 16px -apple-system, system-ui, sans-serif; }
+  #setup { box-sizing: border-box; min-height: 100%; display: flex; flex-direction: column; justify-content: center; gap: 14px; padding: 24px max(24px, env(safe-area-inset-left)); max-width: 480px; margin: auto; }
+  h1 { font-size: 22px; margin: 0; }
+  p { margin: 0; color: #aaa; }
+  label.btn, button { display: block; text-align: center; background: #0a84ff; color: #fff; border: 0; border-radius: 12px; padding: 14px; font-size: 17px; }
+  input[type=file] { display: none; }
+  #status { min-height: 1.4em; color: #aaa; }
+  #player { display: none; position: fixed; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000; }
+  #close { display: none; position: fixed; top: max(12px, env(safe-area-inset-top)); right: 12px; width: auto; padding: 8px 14px; background: rgba(60,60,60,.7); font-size: 15px; }
+</style>
+</head>
+<body>
+<div id="setup">
+  <h1>Ping-Pong Loop</h1>
+  <p>Pick a short video. It plays forward, then backward, forever, with no pause at either end.</p>
+  <label class="btn">Choose video<input id="file" type="file" accept="video/*"></label>
+  <p id="status"></p>
+  <p style="font-size:13px">Runs entirely on your device. Best for clips under ~30 seconds. Audio is dropped.</p>
+</div>
+<video id="player" loop muted playsinline webkit-playsinline autoplay></video>
+<button id="close">Close</button>
+
+<script type="module">
+import { FFmpeg } from "./lib/ffmpeg/index.js";
+
+const $ = (id) => document.getElementById(id);
+const status = (t) => ($("status").textContent = t);
+const ffmpeg = new FFmpeg();
+let loaded = false, lastFrame = 0, url = null;
+
+ffmpeg.on("log", ({ message }) => {
+  const m = /frame=\s*(\d+)/.exec(message);
+  if (m) lastFrame = +m[1];
+});
+ffmpeg.on("progress", ({ progress }) => {
+  if (progress > 0 && progress <= 1) status(`Building loop… ${Math.round(progress * 100)}%`);
+});
+
+async function load() {
+  if (loaded) return;
+  status("Loading converter (one-time, ~30 MB)…");
+  const abs = (p) => new URL(p, location.href).href;
+  await ffmpeg.load({ coreURL: abs("lib/core/ffmpeg-core.js"), wasmURL: abs("lib/core/ffmpeg-core.wasm") });
+  loaded = true;
+}
+
+async function build(file) {
+  await load();
+  status("Reading video…");
+  await ffmpeg.writeFile("in.mp4", new Uint8Array(await file.arrayBuffer()));
+  // Pass 1: count frames (ffmpeg.wasm has no ffprobe).
+  const scale = "scale='min(1280,iw)':-2:flags=bicubic,format=yuv420p";
+  lastFrame = 0;
+  await ffmpeg.exec(["-i", "in.mp4", "-vf", scale, "-f", "null", "-"]);
+  const n = lastFrame;
+  if (n < 3) throw new Error("Video needs at least 3 frames.");
+  // Forward 0..n-1, then backward n-2..1; the loop wraps to 0. No repeated frames.
+  const fc = `[0:v]${scale},split[f][b];` +
+    `[b]reverse,trim=start_frame=1:end_frame=${n - 1},setpts=PTS-STARTPTS[r];` +
+    `[f]setpts=PTS-STARTPTS[f2];[f2][r]concat=n=2:v=1:a=0[v]`;
+  status("Building loop…");
+  const code = await ffmpeg.exec(["-i", "in.mp4", "-filter_complex", fc, "-map", "[v]", "-an",
+    "-c:v", "libx264", "-preset", "ultrafast", "-crf", "20", "-pix_fmt", "yuv420p",
+    "-movflags", "+faststart", "out.mp4"]);
+  if (code !== 0) throw new Error("Conversion failed (video too large for this device?)");
+  const data = await ffmpeg.readFile("out.mp4");
+  await ffmpeg.deleteFile("in.mp4"); await ffmpeg.deleteFile("out.mp4");
+  return new Blob([data.buffer], { type: "video/mp4" });
+}
+
+function show(blob) {
+  if (url) URL.revokeObjectURL(url);
+  url = URL.createObjectURL(blob);
+  const v = $("player");
+  v.src = url; v.loop = true; v.muted = true;
+  v.style.display = "block"; $("close").style.display = "block"; $("setup").style.display = "none";
+  v.play().catch(() => {});
+}
+
+$("file").addEventListener("change", async (e) => {
+  const f = e.target.files[0];
+  if (!f) return;
+  try { show(await build(f)); status(""); }
+  catch (err) { console.error(err); status("Error: " + err.message); }
+  e.target.value = "";
+});
+$("player").addEventListener("click", (e) => e.target.paused ? e.target.play() : e.target.pause());
+$("close").addEventListener("click", () => {
+  const v = $("player"); v.pause(); v.style.display = $("close").style.display = "none"; $("setup").style.display = "flex";
+});
+</script>
+</body>
+</html>
