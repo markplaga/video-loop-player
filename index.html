@@ -18,6 +18,7 @@
   #speedbox { display: none; position: fixed; left: 50%; transform: translateX(-50%); bottom: max(20px, env(safe-area-inset-bottom)); width: min(90vw, 420px); box-sizing: border-box; align-items: center; gap: 12px; padding: 10px 16px; border-radius: 14px; background: rgba(40,40,40,.75); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); }
   #speedbox input { flex: 1; min-width: 0; }
   #speedlabel { min-width: 3.2em; text-align: right; font-variant-numeric: tabular-nums; }
+  #save { display: none; position: fixed; top: max(12px, env(safe-area-inset-top)); left: 12px; width: auto; padding: 8px 14px; background: rgba(60,60,60,.7); font-size: 15px; }
   #close { display: none; position: fixed; top: max(12px, env(safe-area-inset-top)); right: 12px; width: auto; padding: 8px 14px; background: rgba(60,60,60,.7); font-size: 15px; }
 </style>
 </head>
@@ -31,6 +32,7 @@
 </div>
 <video id="player" loop muted playsinline webkit-playsinline autoplay></video>
 <div id="speedbox"><span>Speed</span><input id="speed" type="range" min="0.25" max="3" step="0.05" value="1" aria-label="Playback speed"><span id="speedlabel">1.00x</span></div>
+<button id="save">Save video</button>
 <button id="close">Close</button>
 
 <script type="module">
@@ -39,7 +41,7 @@ import { FFmpeg } from "./lib/ffmpeg/index.js";
 const $ = (id) => document.getElementById(id);
 const status = (t) => ($("status").textContent = t);
 const ffmpeg = new FFmpeg();
-let loaded = false, lastFrame = 0, url = null;
+let loaded = false, lastFrame = 0, url = null, current = null, currentName = "pingpong.mp4";
 
 ffmpeg.on("log", ({ message }) => {
   const m = /frame=\s*(\d+)/.exec(message);
@@ -82,18 +84,20 @@ async function build(file) {
 }
 
 function show(blob) {
+  current = blob;
   if (url) URL.revokeObjectURL(url);
   url = URL.createObjectURL(blob);
   const v = $("player");
   v.src = url; v.loop = true; v.muted = true;
   applySpeed();
-  v.style.display = "block"; $("close").style.display = "block"; $("speedbox").style.display = "flex"; $("setup").style.display = "none";
+  v.style.display = "block"; $("close").style.display = $("save").style.display = "block"; $("speedbox").style.display = "flex"; $("setup").style.display = "none";
   v.play().catch(() => {});
 }
 
 $("file").addEventListener("change", async (e) => {
   const f = e.target.files[0];
   if (!f) return;
+  currentName = f.name.replace(/\.[^.]+$/, "") + "_pingpong.mp4";
   try { show(await build(f)); status(""); }
   catch (err) { console.error(err); status("Error: " + err.message); }
   e.target.value = "";
@@ -103,11 +107,23 @@ function applySpeed() {
   $("player").playbackRate = r; $("player").defaultPlaybackRate = r;
   $("speedlabel").textContent = r.toFixed(2) + "x";
 }
+$("save").addEventListener("click", async () => {
+  if (!current) return;
+  const file = new File([current], currentName, { type: "video/mp4" });
+  // iOS: the share sheet offers "Save Video" (to Photos) or "Save to Files".
+  if (navigator.canShare && navigator.canShare({ files: [file] })) {
+    try { await navigator.share({ files: [file] }); } catch (e) { if (e.name !== "AbortError") console.error(e); }
+    return;
+  }
+  const a = document.createElement("a");
+  a.href = url; a.download = currentName;
+  document.body.appendChild(a); a.click(); a.remove();
+});
 $("speed").addEventListener("input", applySpeed);
 $("player").addEventListener("loadedmetadata", applySpeed);
 $("player").addEventListener("click", (e) => e.target.paused ? e.target.play() : e.target.pause());
 $("close").addEventListener("click", () => {
-  const v = $("player"); v.pause(); v.style.display = $("close").style.display = $("speedbox").style.display = "none"; $("setup").style.display = "flex";
+  const v = $("player"); v.pause(); v.style.display = $("close").style.display = $("save").style.display = $("speedbox").style.display = "none"; $("setup").style.display = "flex";
 });
 </script>
 </body>
