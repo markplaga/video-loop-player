@@ -11,7 +11,8 @@
   #setup { box-sizing: border-box; min-height: 100%; display: flex; flex-direction: column; justify-content: center; gap: 14px; padding: 24px max(24px, env(safe-area-inset-left)); max-width: 480px; margin: auto; }
   h1 { font-size: 22px; margin: 0; }
   p { margin: 0; color: #aaa; }
-  label.btn, button { display: block; text-align: center; background: #0a84ff; color: #fff; border: 0; border-radius: 12px; padding: 14px; font-size: 17px; }
+  label.btn, a.btn, button { display: block; text-align: center; background: #0a84ff; color: #fff; border: 0; border-radius: 12px; padding: 14px; font-size: 17px; }
+  a.btn { text-decoration: none; background: #3a3a3c; }
   input[type=file] { display: none; }
   #status { min-height: 1.4em; color: #aaa; }
   #player { display: none; position: fixed; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000; }
@@ -23,6 +24,7 @@
   <h1>Ping-Pong Loop</h1>
   <p>Pick a short video. It plays forward, then backward, forever, with no pause at either end.</p>
   <label class="btn">Choose video<input id="file" type="file" accept="video/*"></label>
+  <a class="btn" href="https://huggingface.co/spaces/kulkas2pintu/wan777" target="_blank" rel="noopener noreferrer">Create video from image</a>
   <p id="status"></p>
   <p style="font-size:13px">Runs entirely on your device. Best for clips under ~30 seconds. Audio is dropped.</p>
 </div>
