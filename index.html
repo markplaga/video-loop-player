@@ -19,6 +19,9 @@
   #speedbox input { flex: 1; min-width: 0; }
   #speedlabel { min-width: 3.2em; text-align: right; font-variant-numeric: tabular-nums; }
   #save { display: none; position: fixed; top: max(12px, env(safe-area-inset-top)); left: 12px; width: auto; padding: 8px 14px; background: rgba(60,60,60,.7); font-size: 15px; }
+  #save, #close, #speedbox { transition: opacity .3s; }
+  body.idle #save, body.idle #close, body.idle #speedbox { opacity: 0; pointer-events: none; }
+  body.idle #player { cursor: none; }
   #close { display: none; position: fixed; top: max(12px, env(safe-area-inset-top)); right: 12px; width: auto; padding: 8px 14px; background: rgba(60,60,60,.7); font-size: 15px; }
 </style>
 </head>
@@ -89,7 +92,7 @@ function show(blob) {
   url = URL.createObjectURL(blob);
   const v = $("player");
   v.src = url; v.loop = true; v.muted = true;
-  applySpeed();
+  applySpeed(); wake();
   v.style.display = "block"; $("close").style.display = $("save").style.display = "block"; $("speedbox").style.display = "flex"; $("setup").style.display = "none";
   v.play().catch(() => {});
 }
@@ -121,8 +124,19 @@ $("save").addEventListener("click", async () => {
 });
 $("speed").addEventListener("input", applySpeed);
 $("player").addEventListener("loadedmetadata", applySpeed);
-$("player").addEventListener("click", (e) => e.target.paused ? e.target.play() : e.target.pause());
+// Controls fade out after 5 s of no interaction; any press brings them back.
+let idleTimer = null;
+function wake() {
+  document.body.classList.remove("idle");
+  clearTimeout(idleTimer);
+  idleTimer = setTimeout(() => document.body.classList.add("idle"), 5000);
+}
+function stopIdle() { clearTimeout(idleTimer); document.body.classList.remove("idle"); }
+$("player").addEventListener("pointerdown", wake);
+$("speedbox").addEventListener("pointerdown", wake);
+$("speed").addEventListener("input", wake);
 $("close").addEventListener("click", () => {
+  stopIdle();
   const v = $("player"); v.pause(); v.style.display = $("close").style.display = $("save").style.display = $("speedbox").style.display = "none"; $("setup").style.display = "flex";
 });
 </script>
