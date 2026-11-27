@@ -1,6 +1,6 @@
-// Ping-Pong Loop service worker v1 — same-origin app shell only.
+// Ping-Pong Loop service worker v2 — same-origin app shell only.
 // The ffmpeg library files under lib/ are cached on first use, never at install.
-const CACHE_NAME = 'ping-pong-loop-v1';
+const CACHE_NAME = 'ping-pong-loop-v2';
 const CORE_FILES = [
   './',
   'index.html',
