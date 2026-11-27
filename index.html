@@ -30,15 +30,31 @@
   body.idle #save, body.idle #close, body.idle #speedbox { opacity: 0; pointer-events: none; }
   body.idle #player { cursor: none; }
   #close { display: none; position: fixed; top: max(12px, env(safe-area-inset-top)); right: 12px; width: auto; padding: 8px 14px; background: rgba(60,60,60,.7); font-size: 15px; }
+  /* PWA-UPDATE-SYSTEM v2 */
+  [hidden]{display:none!important}
+  .update-bar{position:fixed;top:max(12px, env(safe-area-inset-top));left:50%;transform:translateX(-50%);z-index:30;display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center;justify-content:space-between;background:rgba(40,40,40,.92);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);border:1px solid rgba(255,255,255,.25);border-radius:12px;box-shadow:0 12px 32px rgba(0,0,0,.5);padding:10px 14px;font-size:14px;color:#eee;max-width:calc(100vw - 24px)}
+  .update-bar button{display:inline-block;width:auto;padding:8px 14px;font-size:14px}
+  #updateLater{background:rgba(90,90,90,.8)}
+  /* Version line lives in-flow inside #setup, never over the video stage. */
+  .version-line{font-size:13px;color:#888;display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}
+  .version-line button{width:auto;padding:4px 10px;font-size:13px;background:rgba(60,60,60,.7)}
+  #updateStatus{min-height:1.2em}
 </style>
 </head>
 <body>
+<!-- PWA-UPDATE-SYSTEM v2 -->
+<div class="update-bar" id="updateBar" role="status" aria-live="polite" hidden>
+  <span id="updateText">A new version of Ping-Pong Loop is ready.</span>
+  <span><button id="updateNow" type="button">Update now</button> <button id="updateLater" type="button">Later</button></span>
+</div>
 <div id="setup">
   <h1>Ping-Pong Loop</h1>
   <p>Pick a short video. It plays forward, then backward, forever, with no pause at either end.</p>
   <label class="btn">Choose video<input id="file" type="file" accept="video/*"></label>
   <p id="status"></p>
   <p style="font-size:13px">Runs entirely on your device. Best for clips under ~30 seconds. Audio is dropped.</p>
+  <!-- PWA-UPDATE-SYSTEM v2 -->
+  <p class="version-line"><span>Ping-Pong Loop v<span id="appVersion"></span></span><span id="updateStatus"></span><button id="checkUpdates" hidden type="button">Check for updates</button></p>
 </div>
 <video id="player" loop muted playsinline webkit-playsinline autoplay></video>
 <div id="speedbox"><span>Speed</span><input id="speed" type="range" min="0.25" max="3" step="0.05" value="1" aria-label="Playback speed"><span id="speedlabel">1.00x</span></div>
@@ -52,6 +68,10 @@ const $ = (id) => document.getElementById(id);
 const status = (t) => ($("status").textContent = t);
 const ffmpeg = new FFmpeg();
 let loaded = false, lastFrame = 0, url = null, current = null, currentName = "pingpong.mp4";
+// PWA-UPDATE-SYSTEM v2: unsaved-work state (see the window.__pingpongUpdate
+// bridge below). A conversion in progress, or a built loop that has not
+// been saved yet, is unsaved work: an update reload would lose it.
+let building = false, savedCurrent = false;
 
 ffmpeg.on("log", ({ message }) => {
   const m = /frame=\s*(\d+)/.exec(message);
@@ -70,6 +90,8 @@ async function load() {
 }
 
 async function build(file) {
+  building = true;
+  try {
   await load();
   status("Reading video…");
   await ffmpeg.writeFile("in.mp4", new Uint8Array(await file.arrayBuffer()));
@@ -91,10 +113,12 @@ async function build(file) {
   const data = await ffmpeg.readFile("out.mp4");
   await ffmpeg.deleteFile("in.mp4"); await ffmpeg.deleteFile("out.mp4");
   return new Blob([data.buffer], { type: "video/mp4" });
+  } finally { building = false; }
 }
 
 function show(blob) {
   current = blob;
+  savedCurrent = false; // a fresh loop is unsaved work until Save succeeds
   if (url) URL.revokeObjectURL(url);
   url = URL.createObjectURL(blob);
   const v = $("player");
@@ -122,7 +146,7 @@ $("save").addEventListener("click", async () => {
   const file = new File([current], currentName, { type: "video/mp4" });
   // iOS: the share sheet offers "Save Video" (to Photos) or "Save to Files".
   if (navigator.canShare && navigator.canShare({ files: [file] })) {
-    try { await navigator.share({ files: [file] }); } catch (e) { if (e.name !== "AbortError") console.error(e); }
+    try { await navigator.share({ files: [file] }); savedCurrent = true; } catch (e) { if (e.name !== "AbortError") console.error(e); }
     return;
   }
   const a = document.createElement("a");
@@ -144,16 +168,261 @@ $("speedbox").addEventListener("pointerdown", wake);
 $("speed").addEventListener("input", wake);
 $("close").addEventListener("click", () => {
   stopIdle();
+  // The loop blob is unreachable after Close (Save is hidden), so
+  // discarding it here loses nothing and clears the unsaved-work flag.
+  current = null; savedCurrent = false;
   const v = $("player"); v.pause(); v.style.display = $("close").style.display = $("save").style.display = $("speedbox").style.display = "none"; $("setup").style.display = "flex";
 });
+
+// PWA-UPDATE-SYSTEM v2 bridge: the update script below cannot see this
+// module's state, so it asks here. A conversion in progress, or a built
+// loop that has not been saved yet, is unsaved work — a reload would lose
+// it. No localStorage, sessionStorage, or IndexedDB is used, so there is
+// nothing to persist; Update now is refused while this reports dirty.
+window.__pingpongUpdate = { isDirty: () => building || (current !== null && !savedCurrent) };
 </script>
 <script>
-  // Register the Ping-Pong Loop service worker (same-origin app shell only).
-  if ('serviceWorker' in navigator) {
-    window.addEventListener('load', () => {
-      navigator.serviceWorker.register('sw.js').catch((err) => console.warn('SW registration failed:', err));
+  // PWA-UPDATE-SYSTEM v2: auto-update, version banner, Check for updates. Do not remove this line.
+  // The page keeps no saved state (no localStorage, sessionStorage, or
+  // IndexedDB). Unsaved work is in-memory only — a conversion in
+  // progress, or a built loop not yet saved — reported through
+  // window.__pingpongUpdate (see the bridge at the end of the module
+  // script above). Update now is refused while this tab, or any other
+  // Ping-Pong Loop tab, reports it.
+const APP_RELEASE='1.0.0-20261127-1';
+const APP_VERSION='1.0.0';
+  (function(){
+    var LATER_KEY = 'pingpong-update-later-v2';
+    var BC_NAME = 'ping-pong-loop-update-v2';
+
+    document.getElementById('appVersion').textContent = APP_VERSION;
+    var status = document.getElementById('updateStatus'), checkBtn = document.getElementById('checkUpdates'), bar = document.getElementById('updateBar');
+    var say = function(t){ status.textContent = t; };
+    if (!('serviceWorker' in navigator) || !/^https?:$/.test(location.protocol)) return;
+    checkBtn.hidden = false;
+
+    var reg = null, userAsked = false, reloading = false, verifying = false, updating = false;
+    var remote = null, pendingRelease = null, checkPromise = null;
+    var tabId = 'tab-' + Math.random().toString(36).slice(2) + Date.now().toString(36);
+
+    // Unsaved work comes from the app module via window.__pingpongUpdate
+    // (a conversion in progress, or a built loop not yet saved). The
+    // module script is deferred, so guard for it not existing yet.
+    function isDirty(){
+      var b = window.__pingpongUpdate;
+      return !!(b && typeof b.isDirty === 'function' && b.isDirty());
+    }
+
+    // Multi-tab coordination over BroadcastChannel.
+    var bc = null, bcWaiters = {};
+    try { if ('BroadcastChannel' in window) bc = new BroadcastChannel(BC_NAME); } catch (e) {}
+    if (bc) bc.onmessage = function(ev){
+      var d = ev.data || {};
+      if (d.type === 'update-query' && d.from !== tabId) {
+        try { bc.postMessage({ type: 'update-response', id: d.id, from: tabId, blocked: isDirty() }); } catch (e) {}
+      } else if (d.type === 'update-response' && bcWaiters[d.id]) {
+        bcWaiters[d.id].push(d);
+      }
+    };
+    function queryTabs(release){
+      return new Promise(function(resolve){
+        if (!bc) return resolve([]);
+        var id = 'q-' + Math.random().toString(36).slice(2) + Date.now().toString(36);
+        var answers = [];
+        bcWaiters[id] = answers;
+        try { bc.postMessage({ type: 'update-query', id: id, from: tabId, release: release }); } catch (e) {}
+        setTimeout(function(){ delete bcWaiters[id]; resolve(answers); }, 800);
+      });
+    }
+
+    function workerVersion(worker, ms){
+      return new Promise(function(resolve){
+        if (!worker || !('MessageChannel' in window)) return resolve(null);
+        var done = false, timer = null;
+        try {
+          var ch = new MessageChannel();
+          timer = setTimeout(function(){ if (!done) { done = true; resolve(null); } }, ms);
+          ch.port1.onmessage = function(ev){
+            if (done) return; done = true; clearTimeout(timer);
+            var d = ev.data || {};
+            resolve((d.release && d.displayVersion) ? d : null);
+          };
+          worker.postMessage({ type: 'GET_VERSION' }, [ch.port2]);
+        } catch (e) { if (timer) clearTimeout(timer); resolve(null); }
+      });
+    }
+    function workerClientCount(worker){
+      return new Promise(function(resolve){
+        if (!worker || !('MessageChannel' in window)) return resolve(null);
+        var done = false, timer = null;
+        try {
+          var ch = new MessageChannel();
+          timer = setTimeout(function(){ if (!done) { done = true; resolve(null); } }, 2000);
+          ch.port1.onmessage = function(ev){
+            if (done) return; done = true; clearTimeout(timer);
+            var d = ev.data || {};
+            resolve(typeof d.count === 'number' ? d.count : null);
+          };
+          worker.postMessage({ type: 'GET_CLIENTS' }, [ch.port2]);
+        } catch (e) { if (timer) clearTimeout(timer); resolve(null); }
+      });
+    }
+    function waitControllerChange(ms){
+      return new Promise(function(resolve){
+        var done = false;
+        var timer = setTimeout(function(){ if (!done) { done = true; resolve(false); } }, ms);
+        var onChange = function(){
+          if (done) return; done = true; clearTimeout(timer);
+          navigator.serviceWorker.removeEventListener('controllerchange', onChange);
+          resolve(true);
+        };
+        navigator.serviceWorker.addEventListener('controllerchange', onChange);
+      });
+    }
+
+    function showBar(display, release, manual){
+      if (release) pendingRelease = release;
+      var later = null;
+      try { later = sessionStorage.getItem(LATER_KEY); } catch (e) {}
+      document.getElementById('updateText').textContent = 'Ping-Pong Loop ' + (display ? 'v' + display + ' ' : '') + 'is ready.';
+      if (later && release && later === release && !manual) return;
+      bar.hidden = false;
+      say('An update is ready.');
+    }
+    function fetchRemote(){
+      return fetch('version.json?t=' + Date.now(), { cache: 'no-store' })
+        .then(function(r){ if (!r.ok) throw new Error('http ' + r.status); return r.json(); })
+        .then(function(info){ remote = (info && typeof info.release === 'string') ? info : null; return remote; })
+        .catch(function(){ remote = null; return null; });
+    }
+    function maybeShowUpdate(manual){
+      return fetchRemote().then(function(info){
+        if (reg) return reg.update().catch(function(){}).then(function(){ return info; });
+        return info;
+      }).then(function(info){
+        var w = reg && reg.waiting;
+        if (!w || !navigator.serviceWorker.controller) {
+          if (manual) {
+            if (!info) say('Could not reach the server. Try again when you are online.');
+            else if (info.release && info.release !== APP_RELEASE) say('Version ' + info.version + ' found. Downloading\u2026');
+            else say('You have the latest version (' + APP_VERSION + ').');
+          }
+          return false;
+        }
+        return workerVersion(w, 2000).then(function(verified){
+          if (verified) {
+            if (info && info.release && verified.release !== info.release) {
+              if (manual) say('The downloaded update did not match the published release. Try again.');
+              return false;
+            }
+            showBar(verified.displayVersion, verified.release, manual);
+            if (manual) say('An update is ready.');
+            return true;
+          }
+          // Handshake failed: show the banner, but name no version.
+          showBar(null, info && info.release, manual);
+          if (manual) say('An update is ready.');
+          return true;
+        });
+      });
+    }
+    function check(manual){
+      if (checkPromise) return checkPromise;
+      if (manual) { say('Checking\u2026'); checkBtn.disabled = true; }
+      checkPromise = maybeShowUpdate(manual).catch(function(){ return false; }).then(function(ok){
+        checkPromise = null;
+        if (manual) checkBtn.disabled = false;
+        return ok;
+      });
+      return checkPromise;
+    }
+    function track(w){
+      if (!w) return;
+      w.addEventListener('statechange', function(){
+        if (w.state === 'installed') check(false);
+      });
+    }
+
+    async function applyUpdate(){
+      if (updating) return;
+      updating = true;
+      try {
+        var w = reg && reg.waiting;
+        if (!w) { say('No update is waiting. Tap Check for updates first.'); return; }
+        var expected = pendingRelease || (remote && remote.release);
+        // 1. This tab's own work: refuse while a conversion is running
+        // or a built loop has not been saved yet.
+        if (isDirty()) {
+          say('A conversion is running or a loop is not saved yet \u2014 save it or close the player first, then tap Update now.');
+          return;
+        }
+        // 2. Coordinate with other tabs of this app.
+        say('Checking other tabs\u2026');
+        var answers = await queryTabs(expected);
+        if (answers.some(function(a){ return a.blocked; })) {
+          say('Another Ping-Pong Loop tab is converting or has an unsaved loop \u2014 save it or close the player there first, or close that tab.');
+          return;
+        }
+        if (answers.length === 0) {
+          var count = await workerClientCount(w);
+          if (count === null || count > 1) {
+            say('Another Ping-Pong Loop tab is open and couldn\u2019t confirm it\u2019s safe.');
+            return;
+          }
+        }
+        // 3. Activate only the specific waiting worker.
+        say('Updating\u2026');
+        userAsked = true;
+        verifying = true;
+        var changed = waitControllerChange(8000);
+        w.postMessage({ type: 'SKIP_WAITING' });
+        var ok = await changed;
+        verifying = false;
+        if (!ok) {
+          userAsked = false;
+          say('The update did not start. Tap Update now to try again, or Later to defer it.');
+          return;
+        }
+        // 4. Verify the new controller really is the expected release,
+        // then reload exactly once. No blind reload fallback exists.
+        var info = await workerVersion(navigator.serviceWorker.controller, 2000);
+        if (!info || (expected && info.release !== expected)) {
+          userAsked = false;
+          say('The update did not take over as expected. Tap Update now to try again, or Later to defer it.');
+          return;
+        }
+        if (reloading) return;
+        reloading = true;
+        location.reload();
+      } finally { updating = false; }
+    }
+
+    document.getElementById('updateNow').onclick = applyUpdate;
+    document.getElementById('updateLater').onclick = function(){
+      bar.hidden = true;
+      try { sessionStorage.setItem(LATER_KEY, pendingRelease || (remote && remote.release) || '?'); } catch (e) {}
+      say('Update postponed. You will be asked again next time you open the app, or tap Check for updates.');
+    };
+    checkBtn.onclick = function(){ check(true); };
+    // A controllerchange on its own (first install, or an update
+    // activated from another tab) never reloads this page: only an
+    // explicit Update now in this tab does, after verification in
+    // applyUpdate. There is deliberately no reload here.
+    navigator.serviceWorker.register('sw.js', { updateViaCache: 'none', scope: './' }).then(function(r){
+      reg = r;
+      if (reg.waiting) check(false);
+      track(reg.installing);
+      reg.addEventListener('updatefound', function(){ track(reg.installing); });
+      check(false);
+    }).catch(function(){});
+    var last = Date.now();
+    document.addEventListener('visibilitychange', function(){
+      if (document.visibilityState === 'visible' && Date.now() - last > 5 * 60e3) { last = Date.now(); check(false); }
     });
-  }
+    setInterval(function(){
+      if (document.visibilityState === 'visible') { last = Date.now(); check(false); }
+    }, 60 * 60e3);
+  })();
 </script>
 </body>
 </html>
