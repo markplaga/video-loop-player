@@ -4,6 +4,13 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#000000">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/svg+xml" href="icons/icon.svg">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Ping-Pong Loop">
 <title>Ping-Pong Loop</title>
 <style>
   :root { color-scheme: dark; }
@@ -139,6 +146,14 @@ $("close").addEventListener("click", () => {
   stopIdle();
   const v = $("player"); v.pause(); v.style.display = $("close").style.display = $("save").style.display = $("speedbox").style.display = "none"; $("setup").style.display = "flex";
 });
+</script>
+<script>
+  // Register the Ping-Pong Loop service worker (same-origin app shell only).
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('sw.js').catch((err) => console.warn('SW registration failed:', err));
+    });
+  }
 </script>
 </body>
 </html>
